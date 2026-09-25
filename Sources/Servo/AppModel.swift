@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
         sites = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }.map { url in
             let port = settings.ports[url.path] ?? nextPort
             if settings.ports[url.path] == nil { settings.ports[url.path] = port; nextPort += 1 }
-            return Site(path: url.path, port: port)
+            return Site(path: url.path, port: port, runtimeSelection: settings.siteRuntimes?[url.path] ?? SiteRuntimeSelection())
         }
         saveSettings()
     }
@@ -80,7 +80,7 @@ final class AppModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func createSite(name: String, template: SiteTemplate) async -> Bool {
+    func createSite(name: String, template: SiteTemplate, runtimes: SiteRuntimeSelection = SiteRuntimeSelection()) async -> Bool {
         let slug = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard slug.range(of: #"^[A-Za-z0-9][A-Za-z0-9_-]*$"#, options: .regularExpression) != nil else {
             errorMessage = "Use letters, numbers, hyphens, or underscores for the site name."
@@ -96,15 +96,19 @@ final class AppModel: ObservableObject {
         appendLog("Creating \(template.rawValue) site \(slug)")
         defer { isWorking = false; operation = "" }
         do {
+            let selection = try pinnedSelection(runtimes)
+            let environment = try selection.environment()
+            let php = try selection.phpExecutable()
             if template == .livewire, let laravel = CommandRunner.executable(named: "laravel") {
-                let output = try await CommandRunner.checked(laravel, arguments: ["new", destination.path, "--using=laravel/livewire-starter-kit", "--no-interaction"])
+                let output = try await CommandRunner.checked(php, arguments: [laravel.path, "new", destination.path, "--using=laravel/livewire-starter-kit", "--no-interaction"], environment: environment)
                 appendLog(output)
             } else {
                 guard let composer = CommandRunner.executable(named: "composer") else { throw CommandError.unavailable("Composer") }
                 let package = template == .livewire ? "laravel/livewire-starter-kit" : "laravel/laravel"
-                let output = try await CommandRunner.checked(composer, arguments: ["create-project", package, destination.path, "--no-interaction"])
+                let output = try await CommandRunner.checked(php, arguments: [composer.path, "create-project", package, destination.path, "--no-interaction"], environment: environment)
                 appendLog(output)
             }
+            try persistSelection(selection, for: Site(path: destination.path, port: 0))
             refreshSites()
             appendLog("Created \(slug)")
             return true
@@ -115,7 +119,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func toggle(_ site: Site) {
+    func toggle(_ originalSite: Site) {
+        var site = originalSite
         guard !httpsSiteIDs.contains(site.id) else { return }
         if server.isRunning(site) {
             server.stop(site)
@@ -129,6 +134,8 @@ final class AppModel: ObservableObject {
                 guard let localIP else {
                     throw CommandError.failed("Start secure site", 1, "Servo could not find this Mac’s local network address. Connect to Wi-Fi or Ethernet and try again.")
                 }
+                site.runtimeSelection = try pinnedSelection(site.runtimeSelection)
+                try persistSelection(site.runtimeSelection, for: site)
                 try server.start(site)
                 try server.startHTTPS(site, host: localIP)
                 if !UserDefaults.standard.bool(forKey: "caddyCAWasTrusted") {
@@ -232,6 +239,74 @@ final class AppModel: ObservableObject {
     }
 
     func refreshRuntimes() async { runtimes = await RuntimeService.scan() }
+
+    func installed(_ kind: RuntimeInfo.Kind) -> [RuntimeInfo] {
+        runtimes.filter { $0.kind == kind }
+    }
+
+    func selectRuntime(_ runtime: RuntimeInfo, for site: Site) {
+        guard !server.isRunning(site), !httpsSiteIDs.contains(site.id) else { return }
+        var selection = site.runtimeSelection
+        if runtime.kind == .php { selection.php = RuntimePin(runtime) }
+        if runtime.kind == .node { selection.node = RuntimePin(runtime) }
+        do {
+            // Allow repairing one missing pin even when the other also needs replacing.
+            _ = try RuntimePin(runtime).executable()
+            try persistSelection(selection, for: site)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func persistSelection(_ selection: SiteRuntimeSelection, for site: Site) throws {
+        var updated = settings
+        if updated.siteRuntimes == nil { updated.siteRuntimes = [:] }
+        updated.siteRuntimes?[site.path] = selection
+        try JSONEncoder().encode(updated).write(to: Self.settingsURL, options: .atomic)
+        settings = updated
+        if let index = sites.firstIndex(where: { $0.id == site.id }) { sites[index].runtimeSelection = selection }
+    }
+
+    private func pinnedSelection(_ selection: SiteRuntimeSelection) throws -> SiteRuntimeSelection {
+        var result = selection
+        for kind in [RuntimeInfo.Kind.php, .node] {
+            if (kind == .php ? result.php : result.node) == nil,
+               let runtime = installed(kind).first {
+                if kind == .php { result.php = RuntimePin(runtime) } else { result.node = RuntimePin(runtime) }
+            }
+        }
+        guard result.php != nil else { throw CommandError.unavailable("PHP") }
+        _ = try result.environment()
+        return result
+    }
+
+    func installVersion(_ formula: RuntimeFormula) async {
+        guard !isWorking else { return }
+        isWorking = true
+        operation = "Installing \(formula.label)…"
+        defer { isWorking = false; operation = "" }
+        do { appendLog(try await RuntimeService.installVersion(formula)) }
+        catch { errorMessage = error.localizedDescription }
+        await refreshRuntimes()
+    }
+
+    func openTerminal(_ site: Site) {
+        do {
+            let selection = try pinnedSelection(site.runtimeSelection)
+            try persistSelection(selection, for: site)
+            let environment = try selection.environment()
+            let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Servo/Terminals", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let script = folder.appendingPathComponent("Site-\(UUID().uuidString).command")
+            let content = "#!/bin/zsh\ncd -- \(Self.shellQuote(site.path)) || exit 1\nunset PHPRC PHP_INI_SCAN_DIR\nexport PATH=\(Self.shellQuote(environment["PATH"]!))\n/bin/rm -- \(Self.shellQuote(script.path))\nexec /bin/zsh -f\n"
+            try content.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            NSWorkspace.shared.open(script)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 
     func refreshLocalIPAddress() async {
         localIP = await Task.detached(priority: .utility) {

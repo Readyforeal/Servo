@@ -3,6 +3,7 @@ import Foundation
 struct Site: Identifiable, Hashable {
     let path: String
     var port: Int
+    var runtimeSelection = SiteRuntimeSelection()
 
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
@@ -63,6 +64,8 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 struct ServoSettings: Codable {
     var rootPath: String
     var ports: [String: Int]
+    // Optional for backward compatibility with existing settings.json files.
+    var siteRuntimes: [String: SiteRuntimeSelection]? = [:]
 
     static var initial: ServoSettings {
         ServoSettings(

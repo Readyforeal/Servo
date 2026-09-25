@@ -220,7 +220,20 @@ struct SiteRow: View {
                     Text(site.path).lineLimit(1).truncationMode(.middle).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Spacer()
+            VStack(alignment: .trailing, spacing: 6) {
+                SiteRuntimeMenu(kind: .php, selection: Binding(
+                    get: { site.runtimeSelection.php },
+                    set: { pin in
+                        if let runtime = model.installed(.php).first(where: { $0.path == pin?.path }) { model.selectRuntime(runtime, for: site) }
+                    }))
+                SiteRuntimeMenu(kind: .node, selection: Binding(
+                    get: { site.runtimeSelection.node },
+                    set: { pin in
+                        if let runtime = model.installed(.node).first(where: { $0.path == pin?.path }) { model.selectRuntime(runtime, for: site) }
+                    }))
+            }.disabled(running || changingHTTPS)
+                .help(running ? "Stop this site to change its runtimes" : "Choose versions for this site")
+            Spacer(minLength: 4)
 
             if running {
                 if changingHTTPS {
@@ -234,6 +247,7 @@ struct SiteRow: View {
                 }
             }
             Menu {
+                Button("Open Site Terminal", systemImage: "terminal") { model.openTerminal(site) }
                 Button("Reveal in Finder") { model.reveal(site) }
                 if https {
                     Divider()
@@ -269,6 +283,7 @@ struct NewSiteView: View {
     @Binding var isPresented: Bool
     @State private var name = ""
     @State private var template: SiteTemplate = .livewire
+    @State private var selection = SiteRuntimeSelection()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -284,13 +299,15 @@ struct NewSiteView: View {
                     }
                 }
                 .pickerStyle(.radioGroup)
+                SiteRuntimeMenu(kind: .php, selection: $selection.php, onManage: { isPresented = false })
+                SiteRuntimeMenu(kind: .node, selection: $selection.node, onManage: { isPresented = false })
             }
             if model.isWorking { HStack { ProgressView(); Text(model.operation).foregroundStyle(.secondary) } }
             HStack {
                 Spacer()
                 Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction).disabled(model.isWorking)
                 Button("Create") {
-                    Task { if await model.createSite(name: name, template: template) { isPresented = false } }
+                    Task { if await model.createSite(name: name, template: template, runtimes: selection) { isPresented = false } }
                 }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(name.isEmpty || model.isWorking)
             }
@@ -320,6 +337,9 @@ struct RuntimesView: View {
             }
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    Text("Install versions side by side, then choose PHP and Node.js on each site. Stop a site before switching. Existing selections stay pinned; no global linking is changed.")
+                        .font(.system(size: 11)).foregroundStyle(ServoPalette.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                     ForEach(manageable, id: \.rawValue) { kind in runtimeRow(kind) }
                 }.padding(2).padding(.bottom, 20)
             }
@@ -327,26 +347,72 @@ struct RuntimesView: View {
             .task { await model.refreshRuntimes() }
     }
     private func runtimeRow(_ kind: RuntimeInfo.Kind) -> some View {
-        let installed = model.runtimes.first { $0.kind == kind }
-        return HStack(spacing: 14) {
-            Image(systemName: installed == nil ? "shippingbox" : "checkmark.seal")
-                .font(.system(size: 20)).foregroundStyle(ServoPalette.icon).frame(width: 44, height: 44)
-            VStack(alignment: .leading, spacing: 4) {
+        let installed = model.installed(kind)
+        let versions = RuntimeFormula.available.filter { $0.kind == kind }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                Image(systemName: "shippingbox").font(.system(size: 20)).foregroundStyle(ServoPalette.icon)
                 Text(kind.rawValue).font(.system(size: 13, weight: .medium))
-                if let installed {
-                    Text(installed.version).lineLimit(1).font(.system(size: 11)).foregroundStyle(ServoPalette.muted)
-                    Text(installed.path).lineLimit(1).truncationMode(.middle).font(.system(size: 10)).foregroundStyle(ServoPalette.muted)
-                } else { Text("Not installed").font(.system(size: 11)).foregroundStyle(ServoPalette.muted) }
+                Spacer()
+                if !versions.isEmpty {
+                    Menu("Install version") {
+                        ForEach(versions) { formula in
+                            Button(formula.label) { Task { await model.installVersion(formula) } }
+                        }
+                    }.menuStyle(.borderlessButton).fixedSize().disabled(model.isWorking)
+                } else if installed.isEmpty {
+                    Button("Install") { Task { await model.install(kind) } }
+                        .buttonStyle(ServoButtonStyle()).disabled(model.isWorking)
+                }
             }
-            Spacer()
-            if installed == nil {
-                Button { Task { await model.install(kind) } } label: {
-                    Text("Install").font(.system(size: 11)).padding(.horizontal, 14).frame(height: 30)
-                }.buttonStyle(ServoButtonStyle()).disabled(model.isWorking)
+            if installed.isEmpty {
+                Text("Not installed").font(.system(size: 11)).foregroundStyle(ServoPalette.muted)
+            }
+            ForEach(installed) { runtime in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtime.version).font(.system(size: 11)).lineLimit(1)
+                    Text(runtime.path).font(.system(size: 10)).foregroundStyle(ServoPalette.muted)
+                        .lineLimit(1).truncationMode(.middle).help(runtime.path)
+                }
             }
         }.padding(16).servoGlass()
     }
 }
+
+struct SiteRuntimeMenu: View {
+    @EnvironmentObject private var model: AppModel
+    let kind: RuntimeInfo.Kind
+    @Binding var selection: RuntimePin?
+    var onManage: (() -> Void)? = nil
+
+    private var title: String {
+        guard let selection else { return "\(kind.rawValue) · choose" }
+        let version = selection.version.range(of: #"[0-9]+\.[0-9]+(?:\.[0-9]+)?"#, options: .regularExpression)
+            .map { String(selection.version[$0]) } ?? selection.version
+        return "\(kind.rawValue) \(version)"
+    }
+
+    var body: some View {
+        Menu {
+            if let selection, !FileManager.default.isExecutableFile(atPath: selection.path) {
+                Text("Selected version missing — choose an installed version")
+            }
+            ForEach(model.installed(kind)) { runtime in
+                Button {
+                    selection = RuntimePin(runtime)
+                } label: {
+                    if runtime.path == selection?.path { Label(runtime.version, systemImage: "checkmark") }
+                    else { Text(runtime.version) }
+                }
+            }
+            Divider()
+            Button("Manage versions…") { model.selected = .runtimes; onManage?() }
+        } label: {
+            Text(title).font(.system(size: 11)).foregroundStyle(ServoPalette.icon)
+        }.menuStyle(.borderlessButton).fixedSize()
+    }
+}
+
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
     var body: some View {

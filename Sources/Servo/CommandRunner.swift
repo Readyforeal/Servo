@@ -36,14 +36,14 @@ enum CommandRunner {
         return nil
     }
 
-    static func run(_ executable: URL, arguments: [String], directory: URL? = nil) async throws -> CommandResult {
+    static func run(_ executable: URL, arguments: [String], directory: URL? = nil, environment overrides: [String: String]? = nil) async throws -> CommandResult {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             let pipe = Pipe()
             process.executableURL = executable
             process.arguments = arguments
             process.currentDirectoryURL = directory
-            process.environment = environment()
+            process.environment = overrides ?? environment()
             process.standardOutput = pipe
             process.standardError = pipe
             DispatchQueue.global(qos: .utility).async {
@@ -60,8 +60,8 @@ enum CommandRunner {
         }
     }
 
-    static func checked(_ executable: URL, arguments: [String], directory: URL? = nil) async throws -> String {
-        let result = try await run(executable, arguments: arguments, directory: directory)
+    static func checked(_ executable: URL, arguments: [String], directory: URL? = nil, environment: [String: String]? = nil) async throws -> String {
+        let result = try await run(executable, arguments: arguments, directory: directory, environment: environment)
         guard result.status == 0 else {
             throw CommandError.failed(([executable.lastPathComponent] + arguments).joined(separator: " "), result.status, result.output)
         }

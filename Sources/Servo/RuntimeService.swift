@@ -35,12 +35,42 @@ enum RuntimeService {
         var results: [RuntimeInfo] = []
         for (kind, name) in executableNames {
             guard let executable = CommandRunner.executable(named: name) else { continue }
-            if let result = try? await CommandRunner.run(executable, arguments: ["--version"]) {
+            if let result = try? await CommandRunner.run(executable, arguments: ["--version"]), result.status == 0 {
                 let firstLine = result.output.split(separator: "\n").first.map(String.init) ?? "Installed"
                 results.append(RuntimeInfo(kind: kind, path: executable.path, version: firstLine))
             }
         }
-        return results
+        // Versioned Homebrew formulae are keg-only: never require brew link.
+        for prefix in ["/opt/homebrew", "/usr/local"] {
+            let opt = URL(fileURLWithPath: prefix).appendingPathComponent("opt")
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: opt.path)) ?? []
+            for name in names.sorted() {
+                let kind: RuntimeInfo.Kind
+                let executableName: String
+                if name == "php" || name.hasPrefix("php@") { kind = .php; executableName = "php" }
+                else if name == "node" || name.hasPrefix("node@") { kind = .node; executableName = "node" }
+                else { continue }
+                let executable = opt.appendingPathComponent("\(name)/bin/\(executableName)").resolvingSymlinksInPath()
+                guard FileManager.default.isExecutableFile(atPath: executable.path),
+                      !results.contains(where: { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath() == executable }),
+                      let result = try? await CommandRunner.run(executable, arguments: ["--version"]), result.status == 0 else { continue }
+                results.append(RuntimeInfo(kind: kind, path: executable.path,
+                    version: result.output.split(separator: "\n").first.map(String.init) ?? name))
+            }
+        }
+        return results.map { runtime in
+            RuntimeInfo(kind: runtime.kind,
+                path: URL(fileURLWithPath: runtime.path).resolvingSymlinksInPath().path,
+                version: runtime.version)
+        }
+    }
+
+    static func installVersion(_ formula: RuntimeFormula) async throws -> String {
+        guard RuntimeFormula.available.contains(where: { $0.formula == formula.formula }) else {
+            throw CommandError.unavailable("Supported runtime formula")
+        }
+        let brew = try await ensureHomebrew()
+        return try await CommandRunner.checked(brew, arguments: ["install", formula.formula])
     }
 
     static func isInstalled(_ kind: RuntimeInfo.Kind) -> Bool {

@@ -19,8 +19,9 @@ final class SiteServer {
     var onLog: ((String) -> Void)?
 
     func start(_ site: Site) throws {
+        let php = try site.runtimeSelection.phpExecutable()
+        _ = try site.runtimeSelection.environment()
         stopLocal(site)
-        guard let php = CommandRunner.executable(named: "php") else { throw CommandError.unavailable("PHP") }
         let (process, pipe) = try configuredProcess(
             site: site,
             php: php,
@@ -106,7 +107,7 @@ final class SiteServer {
 
     func startSharing(_ site: Site) throws {
         guard sharedServers[site.id] == nil, isRunning(site) else { return }
-        guard let php = CommandRunner.executable(named: "php") else { throw CommandError.unavailable("PHP") }
+        let php = try site.runtimeSelection.phpExecutable()
         let port = sharedPort(for: site)
         let (process, pipe) = try configuredProcess(
             site: site,
@@ -200,7 +201,7 @@ final class SiteServer {
         running.removeAll()
     }
 
-    private func configuredProcess(
+    func configuredProcess(
         site: Site,
         php: URL,
         host: String,
@@ -211,6 +212,7 @@ final class SiteServer {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = php
+        process.environment = try site.runtimeSelection.environment()
 
         if behindHTTPSProxy {
             guard let prepend = securePrependURL() else {
