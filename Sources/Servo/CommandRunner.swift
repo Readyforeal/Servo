@@ -21,18 +21,9 @@ enum CommandError: LocalizedError {
 enum CommandRunner {
     static func executable(named name: String) -> URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let pathParts = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let extra = [
-            "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/bin", "/bin",
-            "\(home)/Library/Application Support/Herd/bin",
-            "\(home)/.composer/vendor/bin", "\(home)/.config/composer/vendor/bin"
-        ]
-        var folders = pathParts + extra
+        var folders = searchFolders(home: home)
         if name == "node" || name == "npm" {
-            let versionRoots = [
-                "\(home)/Library/Application Support/Herd/config/nvm/versions/node",
-                "\(home)/.nvm/versions/node"
-            ]
+            let versionRoots = ["\(home)/.nvm/versions/node"]
             for root in versionRoots {
                 let versions = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
                 folders.append(contentsOf: versions.sorted().reversed().map { "\(root)/\($0)/bin" })
@@ -52,6 +43,7 @@ enum CommandRunner {
             process.executableURL = executable
             process.arguments = arguments
             process.currentDirectoryURL = directory
+            process.environment = environment()
             process.standardOutput = pipe
             process.standardError = pipe
             DispatchQueue.global(qos: .utility).async {
@@ -74,5 +66,34 @@ enum CommandRunner {
             throw CommandError.failed(([executable.lastPathComponent] + arguments).joined(separator: " "), result.status, result.output)
         }
         return result.output
+    }
+
+    static func environment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        environment["PATH"] = searchFolders(home: home).joined(separator: ":")
+        return environment
+    }
+
+    private static func searchFolders(home: String) -> [String] {
+        let inherited = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { !isHerdPath($0) }
+        let standard = [
+            "/opt/homebrew/bin", "/opt/homebrew/sbin",
+            "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+            "\(home)/.local/bin", "\(home)/.local/share/mise/shims", "\(home)/.asdf/shims", "\(home)/.volta/bin",
+            "\(home)/.composer/vendor/bin", "\(home)/.config/composer/vendor/bin"
+        ]
+        var seen = Set<String>()
+        return (standard + inherited).filter { seen.insert($0).inserted }
+    }
+
+    private static func isHerdPath(_ path: String) -> Bool {
+        URL(fileURLWithPath: path).pathComponents.contains { component in
+            let name = component.lowercased()
+            return name == "herd" || name == "herd.app"
+        }
     }
 }

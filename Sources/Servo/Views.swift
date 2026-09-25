@@ -301,10 +301,23 @@ struct NewSiteView: View {
 
 struct RuntimesView: View {
     @EnvironmentObject private var model: AppModel
-    private let manageable: [RuntimeInfo.Kind] = [.php, .node, .composer, .laravel, .caddy]
+    private let manageable: [RuntimeInfo.Kind] = [.homebrew, .php, .node, .composer, .laravel, .caddy]
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            ServoPageTitle(title: "Runtimes", subtitle: "The tools behind your projects.")
+            HStack(alignment: .center) {
+                ServoPageTitle(title: "Runtimes", subtitle: "A complete Servo-managed development toolchain.")
+                Spacer()
+                Button {
+                    Task { await model.installRequiredToolchain() }
+                } label: {
+                    Label("Install Toolchain", systemImage: "shippingbox.and.arrow.backward")
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                }
+                .buttonStyle(ServoButtonStyle())
+                .disabled(model.isWorking || RuntimeService.requiredToolchain.allSatisfy(RuntimeService.isInstalled))
+            }
             ScrollView {
                 LazyVStack(spacing: 12) {
                     ForEach(manageable, id: \.rawValue) { kind in runtimeRow(kind) }

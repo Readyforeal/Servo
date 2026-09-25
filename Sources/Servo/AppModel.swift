@@ -250,6 +250,23 @@ final class AppModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
+    func installRequiredToolchain() async {
+        isWorking = true
+        defer { isWorking = false; operation = "" }
+        do {
+            for kind in RuntimeService.requiredToolchain where !RuntimeService.isInstalled(kind) {
+                operation = "Installing \(kind.rawValue)…"
+                appendLog("Installing \(kind.rawValue)")
+                appendLog(try await RuntimeService.install(kind: kind))
+            }
+            await refreshRuntimes()
+            appendLog("Servo's required toolchain is ready")
+        } catch {
+            await refreshRuntimes()
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func appendLog(_ message: String) {
         guard !message.isEmpty else { return }
         logs.append("\(Date.now.formatted(date: .omitted, time: .standard))  \(message)")

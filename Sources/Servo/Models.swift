@@ -31,6 +31,7 @@ enum SiteTemplate: String, CaseIterable, Identifiable {
 
 struct RuntimeInfo: Identifiable, Hashable {
     enum Kind: String {
+        case homebrew = "Homebrew"
         case php = "PHP"
         case node = "Node.js"
         case composer = "Composer"

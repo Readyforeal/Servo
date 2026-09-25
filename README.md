@@ -1,6 +1,6 @@
 # Servo
 
-Servo is a native SwiftUI macOS app for managing local PHP/Laravel sites without Laravel Herd.
+Servo is a native SwiftUI macOS app for managing local PHP/Laravel sites with its own runtime setup.
 
 ## Included in this MVP
 
@@ -8,8 +8,8 @@ Servo is a native SwiftUI macOS app for managing local PHP/Laravel sites without
 - Discover every immediate child folder as a site.
 - Add projects elsewhere using a symbolic link.
 - Start Laravel or plain PHP sites with LAN-accessible HTTPS enabled automatically through Caddy's internal certificate authority.
-- Detect PHP, Node.js, npm, Composer, and the Laravel installer, including Herd-installed tools.
-- Install missing runtimes and Caddy through Homebrew.
+- Detect Homebrew, PHP, Node.js, npm, Composer, the Laravel installer, and Caddy from standard macOS tool locations.
+- Bootstrap Homebrew from its official signed macOS installer on a fresh Apple silicon Mac, then install the complete required toolchain.
 - Create clean Laravel projects or projects based on Laravel's official Livewire starter kit.
 
 ## Run from source
