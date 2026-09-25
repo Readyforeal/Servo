@@ -15,11 +15,13 @@ CLANG_MODULE_CACHE_PATH="$project_dir/.swift-cache/clang" \
 SWIFTPM_MODULECACHE_OVERRIDE="$project_dir/.swift-cache/clang" \
 swift build --disable-sandbox -c "$configuration" "${sdk_arguments[@]}"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+build_dir=$(swift build --disable-sandbox -c "$configuration" --show-bin-path "${sdk_arguments[@]}")
 cp "$build_dir/Servo" "$app_dir/Contents/MacOS/Servo.new"
 mv -f "$app_dir/Contents/MacOS/Servo.new" "$app_dir/Contents/MacOS/Servo"
 cp "$project_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
 cp "$project_dir/Resources/servo.icns" "$app_dir/Contents/Resources/servo.icns"
 cp "$project_dir/Resources/Assets.car" "$app_dir/Contents/Resources/Assets.car"
+cp "$project_dir/Resources/setup-local-domains.sh" "$app_dir/Contents/Resources/setup-local-domains.sh"
 cp "$project_dir/Resources/servo-https-prepend.php" "$app_dir/Contents/Resources/servo-https-prepend.php"
 python3 - "$app_dir/Contents/Info.plist" <<'PYVERSION'
 import pathlib, plistlib, re, sys

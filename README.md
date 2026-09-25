@@ -47,3 +47,7 @@ Selections pin the resolved executable path, including the installed patch relea
 Versioned formula references: [PHP 8.4](https://formulae.brew.sh/formula/php@8.4), [Node.js 24](https://formulae.brew.sh/formula/node@24).
 
 Optional integration test (requires installed PHP 8.4 and 8.5): `SERVO_RUNTIME_SMOKE=1 swift test --disable-sandbox`. It starts two temporary local servers concurrently and verifies the PHP version each serves.
+
+## Local site addresses
+
+Use `http://site.test` on this Mac, with the existing HTTPS LAN address retained for phones. Start a site or choose **File → Enable .test Addresses…** and complete macOS administrator authentication. Clara discovers running sites from Servo’s live URL manifest. See [setup and integration details](docs/LOCAL_DOMAINS.md).

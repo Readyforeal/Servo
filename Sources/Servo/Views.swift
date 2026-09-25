@@ -46,8 +46,9 @@ struct ServoMenuBarView: View {
                     model.open(site)
                 }
 
-                if let url = model.server.httpsURL(for: site) {
-                    Button("Copy HTTPS URL", systemImage: "doc.on.doc") {
+                if running(site) {
+                    let url = model.siteURL(site)
+                    Button("Copy Site URL", systemImage: "doc.on.doc") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(url, forType: .string)
                     }
@@ -59,7 +60,7 @@ struct ServoMenuBarView: View {
             Button(isRunning ? "Stop Site" : "Start Site", systemImage: isRunning ? "stop.circle" : "play.circle") {
                 model.toggle(site)
             }
-            .disabled(model.httpsSiteIDs.contains(site.id))
+            .disabled(!model.httpsSiteIDs.isEmpty || model.isWorking)
 
             Button("Reveal in Finder", systemImage: "folder") {
                 model.reveal(site)
@@ -209,12 +210,9 @@ struct SiteRow: View {
                     Text(site.isLaravel ? "Laravel" : "PHP").font(.system(size: 9)).foregroundStyle(ServoPalette.muted)
                 }
                 if running {
+                    copyableURL(model.siteURL(site), icon: "globe")
                     if let secureURL = model.server.httpsURL(for: site) {
                         copyableURL(secureURL, icon: "lock")
-                    } else {
-                        Label("Starting secure server…", systemImage: "lock")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                 } else {
                     Text(site.path).lineLimit(1).truncationMode(.middle).font(.caption).foregroundStyle(.secondary)

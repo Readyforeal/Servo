@@ -19,10 +19,19 @@ final class AppModel: ObservableObject {
 
     private var settings: ServoSettings
     let server = SiteServer()
+    let domains = LocalDomains()
+    private var registryHeartbeat: Task<Void, Never>?
 
     init() {
         settings = Self.loadSettings()
-        server.onChange = { [weak self] in self?.serverRevision += 1 }
+        server.onChange = { [weak self] in self?.serverRevision += 1; self?.publishSites() }
+        domains.onChange = { [weak self] in self?.serverRevision += 1; self?.publishSites() }
+        registryHeartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.publishSites()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
         server.onLog = { [weak self] message in self?.appendLog(message) }
         try? FileManager.default.createDirectory(atPath: settings.rootPath, withIntermediateDirectories: true)
         refreshSites()
@@ -55,6 +64,7 @@ final class AppModel: ObservableObject {
         panel.directoryURL = rootURL
         guard panel.runModal() == .OK, let url = panel.url else { return }
         server.stopAll()
+        domains.stop()
         settings.rootPath = url.path
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         saveSettings()
@@ -121,7 +131,7 @@ final class AppModel: ObservableObject {
 
     func toggle(_ originalSite: Site) {
         var site = originalSite
-        guard !httpsSiteIDs.contains(site.id) else { return }
+        guard httpsSiteIDs.isEmpty, !isWorking else { return }
         if server.isRunning(site) {
             server.stop(site)
             return
@@ -131,19 +141,20 @@ final class AppModel: ObservableObject {
             defer { httpsSiteIDs.remove(site.id) }
             do {
                 await refreshLocalIPAddress()
-                guard let localIP else {
-                    throw CommandError.failed("Start secure site", 1, "Servo could not find this Mac’s local network address. Connect to Wi-Fi or Ethernet and try again.")
-                }
                 site.runtimeSelection = try pinnedSelection(site.runtimeSelection)
                 try persistSelection(site.runtimeSelection, for: site)
                 try server.start(site)
-                try server.startHTTPS(site, host: localIP)
-                if !UserDefaults.standard.bool(forKey: "caddyCAWasTrusted") {
+                let hosts = Array(LocalDomains.hosts(for: sites).values)
+                if !LocalDomains.configured(hosts) { try await domains.enable(sites) }
+                try await domains.start(sites)
+                publishSites()
+                if let localIP { try server.startHTTPS(site, host: localIP) }
+                if localIP != nil && !UserDefaults.standard.bool(forKey: "caddyCAWasTrusted") {
                     try? await Task.sleep(for: .milliseconds(750))
                     try trustCaddyCA()
                 }
             } catch {
-                if !server.isHTTPS(site) { server.stop(site) }
+                if !domains.ready && !server.isHTTPS(site) { server.stop(site) }
                 if case CommandError.unavailable = error { selected = .runtimes }
                 errorMessage = error.localizedDescription
             }
@@ -208,8 +219,41 @@ final class AppModel: ObservableObject {
     }
 
     func open(_ site: Site) {
-        let address = server.httpsURL(for: site) ?? "http://127.0.0.1:\(site.port)"
+        let address = siteURL(site)
         NSWorkspace.shared.open(URL(string: address)!)
+    }
+
+    func siteURL(_ site: Site) -> String {
+        if domains.ready, let host = domains.routedHosts[site.path] { return "http://\(host)" }
+        return server.httpsURL(for: site) ?? "http://127.0.0.1:\(site.port)"
+    }
+
+    func enableLocalDomains() {
+        guard !isWorking else { return }
+        isWorking = true; operation = "Enabling .test addresses…"
+        Task {
+            defer { isWorking = false; operation = "" }
+            do { try await domains.enable(sites); try await domains.start(sites); publishSites() }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func publishSites() {
+        let records: [[String: Any]] = sites.map { site in
+            ["path": site.path, "resolvedPath": site.url.resolvingSymlinksInPath().standardizedFileURL.path,
+             "url": siteURL(site), "running": server.isRunning(site)]
+        }
+        let value: [String: Any] = ["version": 1, "updatedAt": Date().timeIntervalSince1970,
+                                   "processID": ProcessInfo.processInfo.processIdentifier, "sites": records]
+        do {
+            try FileManager.default.createDirectory(at: LocalDomains.support, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+                .write(to: LocalDomains.support.appendingPathComponent("sites.json"), options: .atomic)
+        } catch { appendLog("Could not publish site URLs: \(error.localizedDescription)") }
+    }
+
+    func shutdown() {
+        registryHeartbeat?.cancel(); domains.stop(); server.stopAll(); publishSites()
     }
 
     func reveal(_ site: Site) { NSWorkspace.shared.activateFileViewerSelecting([site.url]) }

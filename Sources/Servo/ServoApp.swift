@@ -17,7 +17,7 @@ final class ServoAppDelegate: NSObject, NSApplicationDelegate {
         if let content = window.contentView { suppress(content) }
     }
     func applicationWillTerminate(_ notification: Notification) {
-        model?.server.stopAll()
+        model?.shutdown()
     }
 }
 
@@ -46,6 +46,8 @@ struct ServoApp: App {
                 Divider()
             }
             CommandGroup(after: .newItem) {
+                Button("Enable .test Addresses…") { model.enableLocalDomains() }
+                    .disabled(model.isWorking)
                 Button("Refresh Sites") { model.refreshSites() }
                     .keyboardShortcut("r")
             }
